@@ -1,4 +1,6 @@
 import os
+from typing import Optional
+
 import numpy as np
 from PIL import Image
 from albumentations.core.composition import Compose
@@ -13,7 +15,7 @@ class ShipDataset(BaseDataset):
         self,
         df: pd.DataFrame,
         images_dir: str,
-        transform: Compose | None = None
+        transform: Optional[Compose] = None
     ) -> None:
         self.df = df
         self.images_dir = images_dir
