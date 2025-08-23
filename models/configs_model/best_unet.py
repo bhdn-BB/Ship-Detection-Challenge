@@ -1,8 +1,11 @@
 BATCH_SIZE = 128
-LR = 3E-4
+LR = 1e-3
 LR_STEP = 10
 LR_GAMMA = 0.5
 ENCODER = "resnet101"
 DEPTH_ENCODER = 5
 WEIGHT = 'imagenet'
 activation = 'sigmoid'
+OUTPUT_UNET = '/kaggle/working/best_unet.pth'
+EPOCHS = 50
+ENCODER_CHANNELS = [32, 64, 160, 256, 512]
