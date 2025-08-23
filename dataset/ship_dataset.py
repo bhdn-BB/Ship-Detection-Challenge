@@ -1,59 +1,47 @@
 import os
-from typing import Optional
-
 import numpy as np
 from PIL import Image
-from albumentations.core.composition import Compose
+import albumentations as A
 from albumentations.pytorch import ToTensorV2
-from torch import Tensor
 from torch.utils.data import Dataset as BaseDataset
-import pandas as pd
 
 
 class ShipDataset(BaseDataset):
-    def __init__(
-        self,
-        df: pd.DataFrame,
-        images_dir: str,
-        transform: Optional[Compose] = None
-    ) -> None:
+
+    def __init__(self, df, images_dir, transform=None):
         self.df = df
         self.images_dir = images_dir
         self.transform = transform
 
-    def __rle_decode(
-            self,
-            rle_str: str,
-            image_shape: tuple[int, int]
-    ) -> np.ndarray:
+    def _rle_decode(self, rle_str, image_shape):
         s = np.fromstring(rle_str, sep=' ', dtype=int)
         starts = s[0::2] - 1
         lengths = s[1::2]
         mask = np.zeros(image_shape[0] * image_shape[1], dtype=np.uint8)
-        for start, length in zip(starts, lengths):
-            mask[start:start + length] = 1
-        return mask.reshape(image_shape, order='F')
+        for start, lengths in zip(starts, lengths):
+            mask[start:start + lengths] = 1
+        return mask.reshape(image_shape).T
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.df)
 
-    def __getitem__(self, idx: int) -> tuple[Tensor, Tensor]:
+    def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        image_id: str = row['ImageId']
+        image_id = row['ImageId']
         rle_list = row['EncodedPixels']
         image_path = os.path.join(self.images_dir, image_id)
-
         image = Image.open(image_path).convert("RGB")
-        width, height = image.size  #(width, height)
-        mask = np.zeros((height, width), dtype=np.uint8)
+        image = np.array(image)
+        mask = np.zeros((image.shape[0], image.shape[1]), dtype=np.uint8)
         for rle in rle_list:
-            mask_rle = self.__rle_decode(rle, (height, width))
-            mask = np.maximum(mask, mask_rle)
+            if isinstance(rle, str) and rle.strip():
+                mask_rle = self._rle_decode(rle, (image.shape[0], image.shape[1]))
+                mask = np.maximum(mask, mask_rle)
         if self.transform:
-            transformed = self.transform(image=np.array(image), mask=mask)
+            transform = self.transform(image=image, mask=mask)
+            image, mask = transform['image'], transform['mask']
         else:
-            transformed = ToTensorV2()(image=np.array(image), mask=mask)
-        image_tensor = transformed["image"]
-        mask_tensor = transformed["mask"]
-
-        return image_tensor, mask_tensor
+            transform = A.Compose([ToTensorV2()])
+            transformed = transform(image=image, mask=mask)
+            image, mask = transformed['image'], transformed['mask']
+        return image, mask
