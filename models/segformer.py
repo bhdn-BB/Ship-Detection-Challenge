@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-import wandb
 from sklearn.metrics import f1_score
 from transformers import (
     SegformerImageProcessor,
@@ -33,7 +32,6 @@ class Segformer:
             ignore_mismatched_sizes=True
         )
         self.model.config.use_cache = False
-        self.model.gradient_checkpointing_enable()
         self.trainer = None
 
     @staticmethod
@@ -44,7 +42,9 @@ class Segformer:
         f1_macro = f1_score(labels, preds, average="macro")
         return {"f1_macro": f1_macro}
 
-    def my_data_collator(self, features):
+
+    @staticmethod
+    def my_data_collator(features):
         pixel_values = torch.stack([f["pixel_values"] for f in features])
         labels = torch.stack([f["labels"] for f in features])
         return {"pixel_values": pixel_values, "labels": labels}
@@ -58,7 +58,6 @@ class Segformer:
             batch_size=BATCH_SIZE,
             lr=LR,
     ):
-
         args = TrainingArguments(
             output_dir=output_dir,
             save_strategy="epoch",
@@ -91,3 +90,4 @@ class Segformer:
         predictions = self.trainer.predict(dataset)
         preds = np.argmax(predictions.predictions, axis=1)
         return preds
+
