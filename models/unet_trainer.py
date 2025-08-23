@@ -1,90 +1,97 @@
 import os
 import torch
-import segmentation_models_pytorch as smp
-from torch.utils.data import DataLoader
+from matplotlib import pyplot as plt
+from segmentation_models_pytorch.utils.metrics import IoU, Fscore
+from segmentation_models_pytorch.utils.train import TrainEpoch, ValidEpoch
 from tqdm import trange
-import matplotlib.pyplot as plt
-from global_config import DEVICE
-from models.configs_model.unet import BATCH_SIZE, LR, LR_STEP, LR_GAMMA
+from losses.dice import NamedDiceLoss
 
 
 class UNetTrainer:
     def __init__(
             self,
             model,
-            train_dataset,
-            val_dataset,
-            batch_size=BATCH_SIZE,
-            lr=LR,
-            lr_step=LR_STEP,
-            lr_gamma=LR_GAMMA,
+            train_loader,
+            valid_loader,
+            optimizer=None,
+            epochs=30,
+            device=None,
     ):
-        self.device = DEVICE
-        self.model = model.to(self.device)
-        self.train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        self.valid_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-        self.loss = smp.utils.losses.DiceLoss()
-        self.metrics = [smp.utils.metrics.IoU(threshold=0.5),
-                        smp.utils.metrics.Fscore(threshold=0.5, beta=2)]
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
-        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=lr_step, gamma=lr_gamma)
-        self.train_epoch = smp.utils.train.TrainEpoch(
-            self.model, loss=self.loss, metrics=self.metrics, optimizer=self.optimizer,
-            device=self.device, verbose=True
-        )
-        self.valid_epoch = smp.utils.train.ValidEpoch(
-            self.model, loss=self.loss, metrics=self.metrics, device=self.device, verbose=True
-        )
-        self.loss_logs = {"train": [], "val": []}
-        self.metric_logs = {"train": {"iou": [], "f2score": []},
-                            "val": {"iou": [], "f2score": []}}
-        self.max_f2score = 0
-    def train(self, epochs=10, save_path="models/best_model.pth"):
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        for epoch in trange(epochs, desc="Epochs"):
-            print(f"\nEpoch {epoch + 1}/{epochs}")
-            train_logs = self.train_epoch.run(self.train_loader)
-            val_logs = self.valid_epoch.run(self.valid_loader)
-            self.loss_logs["train"].append(train_logs["dice_loss"])
-            self.loss_logs["val"].append(val_logs["dice_loss"])
-            self.metric_logs["train"]["iou"].append(train_logs["iou_score"])
-            self.metric_logs["train"]["f2score"].append(train_logs["fscore"])
-            self.metric_logs["val"]["iou"].append(val_logs["iou_score"])
-            self.metric_logs["val"]["f2score"].append(val_logs["fscore"])
-            print(
-                f"Train Loss: {train_logs['dice_loss']:.4f}, IoU: {train_logs['iou_score']:.4f}, F2: {train_logs['fscore']:.4f}")
-            print(
-                f"Valid Loss: {val_logs['dice_loss']:.4f}, IoU: {val_logs['iou_score']:.4f}, F2: {val_logs['fscore']:.4f}")
-            if val_logs["fscore"] > self.max_f2score:
-                self.max_f2score = val_logs["fscore"]
-                torch.save(self.model.state_dict(), save_path)
-                print(f"✅ Best model saved (F2score = {self.max_f2score:.4f})")
-            self.scheduler.step()
+        self.model = model
+        self.train_loader = train_loader
+        self.valid_loader = valid_loader
+        self.epochs = epochs
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self.metrics = [IoU(threshold=0.5), Fscore(threshold=0.5, beta=2)]
+        self.optimizer = optimizer if optimizer else torch.optim.Adam(self.model.parameters(), lr=1e-3)
 
-    @torch.no_grad()
-    def predict(self, images):
-        self.model.eval()
-        images = images.to(self.device)
-        preds = self.model(images)
-        return preds
+        self.train_epoch = TrainEpoch(
+            self.model,
+            loss=NamedDiceLoss(mode="binary"),
+            metrics=self.metrics,
+            optimizer=self.optimizer,
+            device=self.device,
+            verbose=True
+        )
+
+        self.valid_epoch = ValidEpoch(
+            self.model,
+            loss=NamedDiceLoss(mode="binary"),
+            metrics=self.metrics,
+            device=self.device,
+            verbose=True
+        )
+
+        self.loss_logs = {"train": [], "val": []}
+        self.metric_logs = {"train": {"iou": [], "fscore": []},
+                            "val": {"iou": [], "fscore": []}}
+        self.max_score = 0
+
+    def train(self, save_path="models/best_model.pth"):
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+        for epoch in trange(self.epochs, desc="Epochs"):
+            print(f"\nEpoch {epoch+1}/{self.epochs}")
+
+            train_logs = self.train_epoch.run(self.train_loader)
+            train_loss = train_logs.get("dice_loss", 0)
+            train_iou = train_logs.get("iou_score", 0)
+            train_fscore = train_logs.get("fscore", 0)
+            self.loss_logs["train"].append(train_loss)
+            self.metric_logs["train"]["iou"].append(train_iou)
+            self.metric_logs["train"]["fscore"].append(train_fscore)
+
+            valid_logs = self.valid_epoch.run(self.valid_loader)
+            val_loss = valid_logs.get("dice_loss", 0)
+            val_iou = valid_logs.get("iou_score", 0)
+            val_fscore = valid_logs.get("fscore", 0)
+            self.loss_logs["val"].append(val_loss)
+            self.metric_logs["val"]["iou"].append(val_iou)
+            self.metric_logs["val"]["fscore"].append(val_fscore)
+            print(f"Train Loss: {train_loss:.4f}, IoU: {train_iou:.4f}, Fscore: {train_fscore:.4f}")
+            print(f"Valid Loss: {val_loss:.4f}, IoU: {val_iou:.4f}, Fscore: {val_fscore:.4f}")
+
+            if val_fscore > self.max_score:
+                self.max_score = val_fscore
+                torch.save(self.model, save_path)
+                print(f"Best model saved (Fscore = {val_fscore:.4f})")
 
     def plot_metrics(self):
         fig, axes = plt.subplots(1, 3, figsize=(18, 4))
+
         axes[0].plot(self.loss_logs["train"], label="train")
         axes[0].plot(self.loss_logs["val"], label="val")
-        axes[0].set_title("Loss (DiceLoss)")
+        axes[0].set_title("Dice Loss")
         axes[0].legend()
 
-        # IoU
         axes[1].plot(self.metric_logs["train"]["iou"], label="train")
         axes[1].plot(self.metric_logs["val"]["iou"], label="val")
         axes[1].set_title("IoU")
         axes[1].legend()
 
-        # F2score
-        axes[2].plot(self.metric_logs["train"]["f2score"], label="train")
-        axes[2].plot(self.metric_logs["val"]["f2score"], label="val")
-        axes[2].set_title("F2score")
+        axes[2].plot(self.metric_logs["train"]["fscore"], label="train")
+        axes[2].plot(self.metric_logs["val"]["fscore"], label="val")
+        axes[2].set_title("Fscore")
         axes[2].legend()
 
         plt.show()
