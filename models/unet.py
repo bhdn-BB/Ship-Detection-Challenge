@@ -7,7 +7,7 @@ from tqdm import trange
 from losses.dice import NamedDiceLoss
 
 
-class UNetTrainer:
+class UNet:
     def __init__(
             self,
             model,
